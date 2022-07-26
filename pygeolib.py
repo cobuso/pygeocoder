@@ -1,7 +1,7 @@
 import sys
 import collections
 
-class GeocoderResult(collections.Iterator):
+class GeocoderResult(collections.abc.Iterator):
     """
     A geocoder resultset to iterate through address results.
     Exemple:
