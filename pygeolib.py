@@ -1,6 +1,7 @@
 import sys
 import collections
 
+
 class GeocoderResult(collections.abc.Iterator):
     """
     A geocoder resultset to iterate through address results.
@@ -92,6 +93,13 @@ class GeocoderResult(collections.abc.Iterator):
         return location['lat'], location['lng']
 
     @property
+    def location_type(self):
+        """
+        Return location type for current result
+        """
+        return self.current_data['geometry']['location_type']
+
+    @property
     def latitude(self):
         return self.coordinates[0]
 
@@ -160,7 +168,7 @@ class GeocoderError(Exception):
         :type response: dict
 
         """
-        Exception.__init__(self, status)        # Exception is an old-school class
+        Exception.__init__(self, status) # Exception is an old-school class
         self.status = status
         self.url = url
         self.response = response

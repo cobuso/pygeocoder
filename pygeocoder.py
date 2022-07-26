@@ -21,6 +21,10 @@ import functools
 import base64
 import hmac
 import hashlib
+try:
+    from urllib.parse import urlparse
+except ImportError:
+    from urlparse import urlparse
 from pygeolib import GeocoderError, GeocoderResult
 from __version__ import VERSION
 
@@ -48,78 +52,40 @@ class Geocoder(object):
     """
 
     GEOCODE_QUERY_URL = 'https://maps.google.com/maps/api/geocode/json?'
+    USER_AGENT = 'pygeocoder/' + VERSION + ' (Python)'
 
-    def __init__(self, client_id=None, private_key=None):
+    def __init__(self, api_key=None, client_id=None, private_key=None):
         """
         Create a new :class:`Geocoder` object using the given `client_id` and
-        `referrer_url`.
+        `private_key`.
 
-        :param client_id: Google Maps Premier API key
+        :param api_key: Google Maps Simple API key
+        :type api_key: string
+
+        :param client_id: Google Maps Premier client ID
         :type client_id: string
 
-        Google Maps API Premier users can provide his key to make 100,000 requests
-        a day vs the standard 2,500 requests a day without a key
+        :param private_key: Google Maps Premier API key
+        :type client_id: string
+
+        Google Maps API Premier users can provide his key to make 100,000
+        requests a day vs the standard 2,500 requests a day without a key
 
         """
+        self.api_key = api_key
         self.client_id = client_id
         self.private_key = private_key
         self.proxy = None
 
-    def set_proxy(self, proxy):
-        """
-        Makes every HTTP request to Google geocoding server use the supplied proxy
-        :param proxy: Proxy server string. Can be in the form "10.0.0.1:5000".
-        :type proxy: string
-        """
-        self.proxy = proxy
-
     @omnimethod
-    def get_data(self, params={}):
-        """
-        Retrieve a JSON object from a (parameterized) URL.
-
-        :param params: Dictionary mapping (string) query parameters to values
-        :type params: dict
-        :return: JSON object with the data fetched from that URL as a JSON-format object.
-        :rtype: (dict or array)
-
-        """
-        request = requests.Request('GET',
-                url = Geocoder.GEOCODE_QUERY_URL,
-                params = params,
-                headers = {
-                    'User-Agent': 'pygeocoder/' + VERSION + ' (Python)'
-                })
-
-        if self and self.client_id and self.private_key:
-            self.add_signature(request)
-
-        session = requests.Session()
-
-        if self and self.proxy:
-            session.proxies = {'https': self.proxy, 'http': self.proxy }
-
-        response = session.send(request.prepare())
-        session.close()
-
-        if response.status_code == 403:
-            raise GeocoderError("Forbidden, 403", response.url)
-        response_json = response.json()
-
-        if response_json['status'] != GeocoderError.G_GEO_OK:
-            raise GeocoderError(response_json['status'], response.url)
-        return response_json['results']
-
-    @omnimethod
-    def add_signature(self, request):
-        decoded_key = base64.urlsafe_b64decode(str(self.private_key))
-        signature = hmac.new(decoded_key, request.url, hashlib.sha1)
-        encoded_signature = base64.urlsafe_b64encode(signature.digest())
-        request.params['client'] = str(self.client_id)
-        request.params['signature'] = encoded_signature
-
-    @omnimethod
-    def geocode(self, address, sensor='false', bounds='', region='', language=''):
+    def geocode(
+        self,
+        address,
+        sensor='false',
+        bounds='',
+        region='',
+        language='',
+        components=''):
         """
         Given a string address, return a dictionary of information about
         that location, including its latitude and longitude.
@@ -132,6 +98,8 @@ class Geocoder(object):
         :type bounds: string
         :param region: The region code, specified as a ccTLD ("top-level domain") two-character value for biasing
         :type region: string
+        :param components: The components to use when restricting the search results.
+        :type components: string
         :param language: The language in which to return results.
         :type language: string
         :returns: `geocoder return value`_ dictionary
@@ -152,6 +120,7 @@ class Geocoder(object):
             'bounds':   bounds,
             'region':   region,
             'language': language,
+            'components': components,
         }
 
         if self is not None:
@@ -194,6 +163,79 @@ class Geocoder(object):
             return GeocoderResult(self.get_data(params=params))
         else:
             return GeocoderResult(Geocoder.get_data(params=params))
+
+    def set_proxy(self, proxy):
+        """
+        Makes every HTTP request to Google geocoding server use the supplied proxy
+        :param proxy: Proxy server string. Can be in the form "10.0.0.1:5000".
+        :type proxy: string
+        """
+        self.proxy = proxy
+
+    @omnimethod
+    def get_data(self, params={}):
+        """
+        Retrieve a JSON object from a (parameterized) URL.
+
+        :param params: Dictionary mapping (string) query parameters to values
+        :type params: dict
+        :return: JSON object with the data fetched from that URL as a JSON-format object.
+        :rtype: (dict or array)
+
+        """
+        request = requests.Request(
+            'GET',
+            url=Geocoder.GEOCODE_QUERY_URL,
+            params=params,
+            headers={
+                'User-Agent': Geocoder.USER_AGENT
+            })
+
+        if self and self.client_id and self.private_key:
+            request = self.add_signature(request)
+        elif self and self.api_key:
+            request.params['key'] = self.api_key
+
+        session = requests.Session()
+
+        if self and self.proxy:
+            session.proxies = {'https': self.proxy}
+
+        response = session.send(request.prepare())
+        session.close()
+
+        if response.status_code == 403:
+            raise GeocoderError("Forbidden, 403", response.url)
+        response_json = response.json()
+
+        if response_json['status'] != GeocoderError.G_GEO_OK:
+            raise GeocoderError(response_json['status'], response.url)
+        return response_json['results']
+
+    def add_signature(self, request):
+        """
+        Add the client_id and signature parameters to the URL
+        Based on http://gmaps-samples.googlecode.com/svn/trunk/urlsigning/urlsigner.py
+        See https://developers.google.com/maps/documentation/business/webservices/auth#signature_examples
+        :return: requests.Request object of type 'GET'
+        """
+        inputStr = request.prepare().url + '&client=' + self.client_id
+        url = urlparse(inputStr)
+        urlToSign = url.path + "?" + url.query
+        decodedKey = base64.urlsafe_b64decode(self.private_key)
+        signature = hmac.new(
+            decodedKey,
+            urlToSign.encode('utf-8'),
+            hashlib.sha1)
+        encodedSignature = base64.urlsafe_b64encode(signature.digest())
+        urlSigned = inputStr + '&signature=' + encodedSignature.decode('utf-8')
+        return requests.Request(
+            'GET',
+            url=urlSigned,
+            headers={
+                'User-Agent': Geocoder.USER_AGENT
+            })
+
 
 if __name__ == "__main__":
     import sys
